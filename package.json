@@ -1,0 +1,23 @@
+{
+  "name": "jr-music-cloud-proxy",
+  "version": "1.1.0",
+  "description": "Ultimate Web & Audio Streaming Proxy for Render",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "proxy",
+    "express",
+    "audio-stream",
+    "render"
+  ],
+  "author": "JR AI",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^3.0.0"
+  }
+}
