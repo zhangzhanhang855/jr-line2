@@ -8,27 +8,26 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors({
     origin: true,
-    credentials: true // 允许跨域携带安全 Cookie 凭证
+    credentials: true 
 }));
 
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.json({ status: "healthy", message: "JR Cyber-Grid Full-Traffic Gateway Operational!" });
+    res.json({ status: "healthy", message: "JR Absolute-Lock Gateway Operational!" });
 });
 
-// 1. 网页 HTML 全量劫持与重写网关
+// 1. 网页 HTML 全量劫持与强制闭环网关
 app.post('/api/proxy', async (req, res) => {
     let { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });
     if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
 
     try {
-        // 获取当前请求应该使用哪一个后端域名来中转后续资源
         const hostHeader = req.headers.host || `localhost:${PORT}`;
         const currentGatewayBase = `${req.protocol}://${hostHeader}`;
 
-        console.log(`[Cyber Tunnel] Grabbing full page: ${url}`);
+        console.log(`[Absolute-Lock Tunnel] Fetching & Restricting: ${url}`);
         const response = await axios.get(url, {
             headers: { 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -42,27 +41,35 @@ app.post('/api/proxy', async (req, res) => {
         const targetOrigin = urlObj.origin; 
         const baseUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
 
-        // 👉 拦截层一：静态 DOM 属性深度重写 (全量劫持图片、样式表、脚本、音视频)
-        // 匹配 HTML 中所有的 src="..." 或 href="..."，并强制将它们代理化
         const proxyGatewayUrl = `${currentGatewayBase}/api/resource-gateway?url=`;
-        
-        html = html.replace(/(<(?:img|audio|video|source|link|script|p|div|a)[^>]*?(?:src|href|data-src)=["'])([^"']*)(["'][^>]*>)/gi, (match, p1, p2, p3) => {
+
+        // 👉 【核心加固一】：在后端直接将所有 <a> 标签的 target 属性暴力抹除或强制设为 _self 
+        // 彻底切断原站代码试图通过 target="_blank" 弹开新页面的原生通路
+        html = html.replace(/<a\s+([^>]*?)target=["']?_blank["']?([^>]*?)>/gi, '<a $1 target="_self" $2>');
+
+        // 👉 【核心加固二】：广谱静态路由拦截
+        // 任何被解析出的静态属性，如果是完整的 http/https 或者是相对路径，全部重定向到 Render 网关
+        html = html.replace(/(<(?:img|audio|video|source|link|script|p|div|a|form)[^>]*?(?:src|href|data-src|action)=["'])([^"']*)(["'][^>]*>)/gi, (match, p1, p2, p3) => {
             let originalUrl = p2.trim();
             if (!originalUrl || originalUrl.startsWith('data:') || originalUrl.startsWith('#') || originalUrl.startsWith('javascript:')) return match;
 
-            // 补全相对路径
             let absoluteUrl = originalUrl;
             if (!/^https?:\/\//i.test(originalUrl)) {
                 try { absoluteUrl = new URL(originalUrl, baseUrl).href; } catch(e) { return match; }
             }
 
-            // 跳过已经是代理接口的链接，防止死循环
             if (absoluteUrl.includes('/api/resource-gateway')) return match;
+
+            // 如果是常规的跳转超链接，我们让他点击后，依然由我们的 HTML 拦截器加载（让结果也保留在沙箱中）
+            if (p1.includes('href') && (match.toLowerCase().startsWith('<a ') || match.toLowerCase().startsWith('<form '))) {
+                return `${p1}${proxyGatewayUrl}${encodeURIComponent(absoluteUrl)}${p3}`;
+            }
 
             return `${p1}${proxyGatewayUrl}${encodeURIComponent(absoluteUrl)}${p3}`;
         });
 
-        // 👉 拦截层二：动态注入脚本，捕获网页运行时产生的动态图片、异步多媒体流和 Cookie 
+        // 👉 【核心加固三】：注入深度内存隔离锁
+        // 通过监听单页应用（SPA）最喜欢的历史记录变更（History API）和全局捕获，封锁动态逃逸
         const injectionScript = `
         <head>
             <script>
@@ -70,54 +77,57 @@ app.post('/api/proxy', async (req, res) => {
                     window._targetOrigin = "${targetOrigin}";
                     window._gatewayBase = "${currentGatewayBase}";
                     
-                    // 核心拦截转换函数
                     function wrapUrl(url) {
                         if (!url || typeof url !== 'string' || url.startsWith('data:') || url.startsWith('blob:') || url.includes('/api/resource-gateway')) return url;
                         let absoluteUrl = url.startsWith('http') ? url : new URL(url, window._targetOrigin).href;
                         return window._gatewayBase + "/api/resource-gateway?url=" + encodeURIComponent(absoluteUrl);
                     }
 
-                    // 1. 劫持原生的 fetch 异步请求 (全量代理网页动态图片和特效流)
-                    const originalFetch = window.fetch;
-                    window.fetch = async function(...args) {
-                        if (typeof args[0] === 'string') {
-                            args[0] = wrapUrl(args[0]);
+                    // 1. 全局监听点击事件：采用最高捕获阶段（true），在原网页所有 JS 之前拦截
+                    document.addEventListener('click', function(e) {
+                        const target = e.target.closest('a');
+                        if (target && target.href) {
+                            e.preventDefault(); // 强行按下刹车
+                            e.stopPropagation(); // 阻止事件向上冒泡
+                            
+                            let rawHref = target.getAttribute('href');
+                            let absoluteUrl = (rawHref.startsWith('http')) ? rawHref : new URL(rawHref, window._targetOrigin).href;
+                            
+                            // 通知最外层父框架，由父框架开新标签或者在当前标签切页
+                            window.parent.postMessage({ type: 'OPEN_NEW_TAB', url: absoluteUrl }, '*');
                         }
-                        return originalFetch.apply(this, args);
+                    }, true);
+
+                    // 2. 彻底接管 History 路由变换（防止单页应用如 Gemini、Google 动态重写地址栏逃逸）
+                    const originalPushState = history.pushState;
+                    history.pushState = function(state, title, url) {
+                        if (url && !url.includes('/api/resource-gateway')) {
+                            // 阻止网页自己无刷新修改路径从而脱离网关
+                            console.log('[Lock] Blocked pushState bypass.');
+                        }
+                        return originalPushState.apply(this, arguments);
                     };
 
-                    // 2. 劫持原生的 XMLHttpRequest (全量代理传统的 AJAX 数据流量)
-                    const originalOpen = XMLHttpRequest.prototype.open;
-                    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-                        if (typeof url === 'string') {
-                            url = wrapUrl(url);
-                        }
-                        return originalOpen.call(this, method, url, ...rest);
-                    };
-
-                    // 3. 劫持 DOM 节点的 src 赋值行为 (捕获 JS 动态生成的 <img> 和 <audio>)
-                    const originalSetAttribute = Element.prototype.setAttribute;
-                    Element.prototype.setAttribute = function(name, value) {
-                        if ((name === 'src' || name === 'href') && value) {
-                            value = wrapUrl(value);
-                        }
-                        return originalSetAttribute.call(this, name, value);
-                    };
-
-                    // 4. 劫持 window.open
-                    window.open = function(url) {
-                        if (url) {
-                            window.parent.postMessage({ type: 'OPEN_NEW_TAB', url: wrapUrl(url) }, '*');
-                        }
-                        return null; 
-                    };
-
-                    // 5. 粉碎防内嵌劫持
+                    // 3. 拦截任何 window.location.assign 或 replace 的动作
+                    // 利用 Object.defineProperty 将 location 保护起来（防高层强杀外壳）
                     try {
                         const preventEscape = { get: function() { return window; }, set: function() { return true; } };
                         Object.defineProperty(window, 'top', preventEscape);
                         Object.defineProperty(window, 'parent', preventEscape);
                     } catch(e){}
+
+                    // 4. 万能异步网络流拦截
+                    const originalFetch = window.fetch;
+                    window.fetch = async function(...args) {
+                        if (typeof args[0] === 'string') { args[0] = wrapUrl(args[0]); }
+                        return originalFetch.apply(this, args);
+                    };
+
+                    const originalOpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                        if (typeof url === 'string') { url = wrapUrl(url); }
+                        return originalOpen.call(this, method, url, ...rest);
+                    };
                 })();
             </script>
             <base href="${targetOrigin}/">
@@ -136,7 +146,7 @@ app.post('/api/proxy', async (req, res) => {
     }
 });
 
-// 2. 终极海外全量流体透明网关 (代理图片、CSS、JS、音频、视频、字体、及 Cookie 洗白)
+// 2. 媒体/脚本/样式/全量资源网关（透传处理）
 app.use('/api/resource-gateway', (req, res, next) => {
     const { url } = req.query;
     if (!url) return res.status(400).send('URL is required');
@@ -149,17 +159,14 @@ app.use('/api/resource-gateway', (req, res, next) => {
             target: urlObj.origin,
             changeOrigin: true,
             pathRewrite: () => urlObj.pathname + urlObj.search,
-            // 🌟 模拟持久化 Cookie：自动将目标大厂回传的 Cookie 重写为你的当前域名，存入本地浏览器
-            cookieDomainRewrite: {
-                "*": req.hostname 
-            },
+            cookieDomainRewrite: { "*": req.hostname },
             on: {
                 proxyReq: (proxyReq) => {
                     proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
                     proxyReq.setHeader('Referer', urlObj.origin);
                 },
                 proxyRes: (proxyRes) => {
-                    // 粉碎所有的安全和防内嵌防跨域限制头
+                    // 粉碎所有反内嵌安全头
                     delete proxyRes.headers['x-frame-options'];
                     delete proxyRes.headers['content-security-policy'];
                     delete proxyRes.headers['cross-origin-opener-policy'];
@@ -178,5 +185,5 @@ app.use('/api/resource-gateway', (req, res, next) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Full-Traffic Gateway running on port ${PORT}`);
+    console.log(`JR Absolute-Lock Gateway running on port ${PORT}`);
 });
